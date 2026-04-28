@@ -2074,7 +2074,10 @@ begin
         end;
     end;
 
-    alt_dict := TncSqliteDictionary.Create(alt_base_path, get_default_user_dictionary_path);
+    // The prewarmed alternate variant shares the same user dictionary. Do not
+    // prune while opening it, because simplified-only rows such as ci -> U+8BCD
+    // look invalid against the traditional base dictionary, and vice versa.
+    alt_dict := TncSqliteDictionary.Create(alt_base_path, get_default_user_dictionary_path, False);
     if alt_dict.open then
     begin
         alt_dict.set_debug_mode(m_config.debug_mode);

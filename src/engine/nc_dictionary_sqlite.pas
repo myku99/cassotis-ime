@@ -24,6 +24,7 @@ type
         m_ready: Boolean;
         m_base_ready: Boolean;
         m_user_ready: Boolean;
+        m_prune_user_entries_on_open: Boolean;
         m_limit: Integer;
         m_bigram_prune_countdown: Integer;
         m_trigram_prune_countdown: Integer;
@@ -126,7 +127,8 @@ type
         function read_user_data_version(out version: Integer): Boolean;
         procedure refresh_user_data_version_if_changed(const force: Boolean);
     public
-        constructor create(const base_db_path: string; const user_db_path: string);
+        constructor create(const base_db_path: string; const user_db_path: string;
+            const prune_user_entries_on_open: Boolean = True);
         destructor Destroy; override;
         function open: Boolean;
         procedure close;
@@ -1809,7 +1811,8 @@ begin
     Result := (Length(value) = 2) and CharInSet(value[1], ['z', 'c', 's']) and (value[2] = 'h');
 end;
 
-constructor TncSqliteDictionary.create(const base_db_path: string; const user_db_path: string);
+constructor TncSqliteDictionary.create(const base_db_path: string; const user_db_path: string;
+    const prune_user_entries_on_open: Boolean = True);
 begin
     inherited create;
     m_base_db_path := base_db_path;
@@ -1817,6 +1820,7 @@ begin
     m_ready := False;
     m_base_ready := False;
     m_user_ready := False;
+    m_prune_user_entries_on_open := prune_user_entries_on_open;
     m_limit := 256;
     m_bigram_prune_countdown := 64;
     m_trigram_prune_countdown := 64;
@@ -4808,7 +4812,7 @@ begin
         end;
     end;
 
-    if m_base_ready and m_user_ready then
+    if m_base_ready and m_user_ready and m_prune_user_entries_on_open then
     begin
         migrate_user_entries;
         prune_user_entries_existing_in_base;
@@ -5758,6 +5762,7 @@ const
     text_stats_sql =
         'SELECT COALESCE(SUM(commit_count), 0), COALESCE(MAX(last_used), 0) ' +
         'FROM dict_user_stats WHERE text = ?1';
+    c_exact_latest_choice_bonus = 1800;
     c_jianpin_score_penalty = 30;
     c_nonfull_exact_penalty = 100;
     c_initial_single_char_penalty = 120;
@@ -5850,6 +5855,7 @@ var
     skipped_noisy_user_count: Integer;
     skipped_base_dup_user_count: Integer;
     injected_learned_base_count: Integer;
+    latest_query_choice_text: string;
 
     function build_mixed_like_pattern(const token_list: TncMixedQueryTokenList): string; forward;
     function is_compact_ascii_query(const value: string): Boolean; forward;
@@ -6317,6 +6323,7 @@ var
         effective_has_dict_weight: Boolean;
         effective_dict_weight: Integer;
         normalized_candidate_pinyin: string;
+        choice_bonus: Integer;
     begin
         if text = '' then
         begin
@@ -6344,10 +6351,17 @@ var
             Inc(applied_learning_bonus_count);
         end;
         if (comment = '') and (candidate_pinyin_key <> '') and
-            same_normalized_pinyin_key(candidate_pinyin_key, query_key) and
-            (get_query_choice_bonus(query_key, text) >= c_recent_explicit_user_choice_bonus_min) then
+            same_normalized_pinyin_key(candidate_pinyin_key, query_key) then
         begin
-            Inc(score_with_bonus, c_recent_explicit_user_choice_bonus);
+            choice_bonus := get_query_choice_bonus(query_key, text);
+            if choice_bonus >= c_recent_explicit_user_choice_bonus_min then
+            begin
+                Inc(score_with_bonus, c_recent_explicit_user_choice_bonus);
+                if (latest_query_choice_text <> '') and SameText(latest_query_choice_text, text) then
+                begin
+                    Inc(score_with_bonus, c_exact_latest_choice_bonus);
+                end;
+            end;
         end;
         if (candidate_pinyin_key <> '') and (comment = '') then
         begin
@@ -7703,6 +7717,11 @@ begin
             query_key := normalized_query_key;
             rebuild_query_mode_state;
         end;
+    end;
+    latest_query_choice_text := '';
+    if full_pinyin_query then
+    begin
+        latest_query_choice_text := get_query_latest_choice_text(query_key);
     end;
 
     single_letter_query := (Length(query_key) = 1) and CharInSet(query_key[1], ['a' .. 'z']);
