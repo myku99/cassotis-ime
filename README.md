@@ -53,9 +53,10 @@ The project focus is:
 - `cassotis_ime_svr.dll` (Win64 TSF in-proc COM server)
 - `cassotis_ime_svr32.dll` (Win32 TSF in-proc COM server)
 - `cassotis_ime_host.exe` (Win64 host process)
+- `cassotis_ime_tray_host.exe` (Win64 tray/status host for tray menu, floating status window, and input-state indicator)
 - `cassotis_ime_profile_reg.exe` (TSF profile/category registration utility)
 
-Without TSF DLL + host process, IME input will not work.
+Without TSF DLL + main host process, IME input will not work. Without the tray/status host, the core input path may still run, but the tray menu, floating status window, and state indicator will be unavailable.
 
 ## Build and Run (Quick Start)
 Prerequisites:
