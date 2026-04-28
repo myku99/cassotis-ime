@@ -75,7 +75,7 @@ From `out/`:
 For full build details, see `BUILD.md`.
 
 ## Dictionary Workflow
-Current base dictionary pipeline imports generated lexicon artifacts from sibling `cassotis_lexicon` / `cassotis_lexicon_public` repository:
+Current base dictionary pipeline imports generated lexicon artifacts from the [cassotis-lexicon](https://github.com/shenmin/cassotis-lexicon) project:
 - lexicon inputs: `dict_unihan_sc.txt`, `dict_unihan_tc.txt`, `dict_clean_sc.txt`, `dict_clean_tc.txt`
 - runtime DB files are rebuilt under `%LOCALAPPDATA%\CassotisIme\data\` (for example `dict_sc.db`, `dict_tc.db`)
 - user dictionary defaults to `%LOCALAPPDATA%\CassotisIme\data\user_dict.db`
