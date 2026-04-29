@@ -65,6 +65,7 @@ type
         m_stmt_record_query_path_insert: Psqlite3_stmt;
         m_query_path_penalty_cache: TDictionary<string, Integer>;
         m_candidate_penalty_cache: TDictionary<string, Integer>;
+        m_candidate_penalty_pinyin_loaded_cache: TDictionary<string, Boolean>;
         m_debug_mode: Boolean;
         m_last_lookup_debug_hint: string;
         m_short_lookup_cache_prewarmed: Boolean;
@@ -126,6 +127,8 @@ type
         procedure clear_user_read_caches;
         function read_user_data_version(out version: Integer): Boolean;
         procedure refresh_user_data_version_if_changed(const force: Boolean);
+        procedure populate_candidate_penalty_cache_for_pinyin(const pinyin_key: string;
+            const compact_pinyin_key: string);
     public
         constructor create(const base_db_path: string; const user_db_path: string;
             const prune_user_entries_on_open: Boolean = True);
@@ -1864,6 +1867,7 @@ begin
     m_query_path_bonus_cache := TDictionary<string, Integer>.Create;
     m_query_path_penalty_cache := TDictionary<string, Integer>.Create;
     m_candidate_penalty_cache := TDictionary<string, Integer>.Create;
+    m_candidate_penalty_pinyin_loaded_cache := TDictionary<string, Boolean>.Create;
     m_debug_mode := False;
     m_last_lookup_debug_hint := '';
     m_short_lookup_cache_prewarmed := False;
@@ -1933,6 +1937,11 @@ begin
     begin
         m_candidate_penalty_cache.Free;
         m_candidate_penalty_cache := nil;
+    end;
+    if m_candidate_penalty_pinyin_loaded_cache <> nil then
+    begin
+        m_candidate_penalty_pinyin_loaded_cache.Free;
+        m_candidate_penalty_pinyin_loaded_cache := nil;
     end;
     if m_query_path_penalty_cache <> nil then
     begin
@@ -5157,6 +5166,10 @@ begin
     begin
         m_candidate_penalty_cache.Clear;
     end;
+    if m_candidate_penalty_pinyin_loaded_cache <> nil then
+    begin
+        m_candidate_penalty_pinyin_loaded_cache.Clear;
+    end;
     if m_query_path_penalty_cache <> nil then
     begin
         m_query_path_penalty_cache.Clear;
@@ -5264,6 +5277,10 @@ begin
     if m_candidate_penalty_cache <> nil then
     begin
         m_candidate_penalty_cache.Clear;
+    end;
+    if m_candidate_penalty_pinyin_loaded_cache <> nil then
+    begin
+        m_candidate_penalty_pinyin_loaded_cache.Clear;
     end;
 end;
 
@@ -10022,6 +10039,79 @@ begin
     end;
 end;
 
+procedure TncSqliteDictionary.populate_candidate_penalty_cache_for_pinyin(
+    const pinyin_key: string; const compact_pinyin_key: string);
+const
+    query_penalties_sql =
+        'SELECT text, penalty, last_used FROM dict_user_penalty ' +
+        'WHERE pinyin = ?1 OR pinyin = ?2';
+var
+    stmt: Psqlite3_stmt;
+    step_result: Integer;
+    text_key: string;
+    cache_key: string;
+    penalty_value: Integer;
+    cached_penalty: Integer;
+    last_used_unix: Int64;
+    now_unix: Int64;
+begin
+    if (pinyin_key = '') or (m_candidate_penalty_cache = nil) or
+        (m_candidate_penalty_pinyin_loaded_cache = nil) or
+        (not m_user_ready) or (m_user_connection = nil) then
+    begin
+        Exit;
+    end;
+
+    if m_candidate_penalty_pinyin_loaded_cache.ContainsKey(pinyin_key) then
+    begin
+        Exit;
+    end;
+
+    stmt := nil;
+    try
+        if (not m_user_connection.prepare(query_penalties_sql, stmt)) or
+            (not m_user_connection.bind_text(stmt, 1, pinyin_key)) or
+            (not m_user_connection.bind_text(stmt, 2, compact_pinyin_key)) then
+        begin
+            Exit;
+        end;
+
+        now_unix := get_unix_time_now;
+        while True do
+        begin
+            step_result := m_user_connection.step(stmt);
+            if step_result <> SQLITE_ROW then
+            begin
+                Break;
+            end;
+
+            text_key := Trim(m_user_connection.column_text(stmt, 0));
+            if text_key = '' then
+            begin
+                Continue;
+            end;
+
+            last_used_unix := m_user_connection.column_int(stmt, 2);
+            penalty_value := calc_candidate_penalty_value(
+                m_user_connection.column_int(stmt, 1), last_used_unix, now_unix);
+            cache_key := pinyin_key + #1 + text_key;
+            if m_candidate_penalty_cache.TryGetValue(cache_key, cached_penalty) and
+                (cached_penalty >= penalty_value) then
+            begin
+                Continue;
+            end;
+            m_candidate_penalty_cache.AddOrSetValue(cache_key, penalty_value);
+        end;
+
+        m_candidate_penalty_pinyin_loaded_cache.AddOrSetValue(pinyin_key, True);
+    finally
+        if stmt <> nil then
+        begin
+            m_user_connection.finalize(stmt);
+        end;
+    end;
+end;
+
 function TncSqliteDictionary.get_candidate_penalty(const pinyin: string; const text: string): Integer;
 const
     query_penalty_sql =
@@ -10049,6 +10139,22 @@ begin
     if (m_candidate_penalty_cache <> nil) and
         m_candidate_penalty_cache.TryGetValue(cache_key, Result) then
     begin
+        Exit;
+    end;
+
+    populate_candidate_penalty_cache_for_pinyin(pinyin_key, compact_pinyin_key);
+    if (m_candidate_penalty_cache <> nil) and
+        m_candidate_penalty_cache.TryGetValue(cache_key, Result) then
+    begin
+        Exit;
+    end;
+    if (m_candidate_penalty_pinyin_loaded_cache <> nil) and
+        m_candidate_penalty_pinyin_loaded_cache.ContainsKey(pinyin_key) then
+    begin
+        if m_candidate_penalty_cache <> nil then
+        begin
+            m_candidate_penalty_cache.AddOrSetValue(cache_key, 0);
+        end;
         Exit;
     end;
 
@@ -10116,6 +10222,10 @@ begin
     if m_candidate_penalty_cache <> nil then
     begin
         m_candidate_penalty_cache.Clear;
+    end;
+    if m_candidate_penalty_pinyin_loaded_cache <> nil then
+    begin
+        m_candidate_penalty_pinyin_loaded_cache.Clear;
     end;
     if m_context_bonus_cache <> nil then
     begin
@@ -10223,6 +10333,10 @@ begin
     if m_candidate_penalty_cache <> nil then
     begin
         m_candidate_penalty_cache.Clear;
+    end;
+    if m_candidate_penalty_pinyin_loaded_cache <> nil then
+    begin
+        m_candidate_penalty_pinyin_loaded_cache.Clear;
     end;
     if m_context_bonus_cache <> nil then
     begin

@@ -19078,12 +19078,7 @@ var
     procedure sort_candidates_lightweight(var candidates: TncCandidateList);
     var
         left_idx: Integer;
-        right_idx: Integer;
         left_units: Integer;
-        right_units: Integer;
-        left_score: Integer;
-        right_score: Integer;
-        tmp: TncCandidate;
         has_exact_complete_phrase_candidate: Boolean;
         lightweight_query_syllables: TncPinyinParseResult;
         lightweight_query_prepared: Boolean;
@@ -19095,12 +19090,14 @@ var
         best_three_syllable_exact_known: TArray<Boolean>;
         unit_cache: TArray<Integer>;
         rank_cache: TArray<Integer>;
-        tmp_units: Integer;
-        tmp_rank: Integer;
         exact_complete_texts: TArray<string>;
         exact_complete_texts_prepared: Boolean;
         latest_query_choice_text: string;
         latest_query_choice_prepared: Boolean;
+        order_cache: TArray<Integer>;
+        sorted_candidates: TncCandidateList;
+        text_cache: TArray<string>;
+        has_lightweight_context_source: Boolean;
 
         function get_display_text_unit_count(const text: string): Integer;
         var
@@ -19335,6 +19332,20 @@ var
             else if normalized_syllable = 'qie' then
             begin
                 Result := string(Char($4E14));
+            end;
+        end;
+
+        function has_lightweight_context_source_local: Boolean;
+        begin
+            Result := Trim(m_left_context) <> '';
+            if Trim(m_segment_left_context) <> '' then
+            begin
+                Exit(True);
+            end;
+            if (Trim(m_segment_left_context) = '') and
+                (Trim(m_external_left_context) <> '') then
+            begin
+                Exit(True);
             end;
         end;
 
@@ -19921,7 +19932,8 @@ var
             remaining_comment_units_local: Integer;
         begin
             Result := candidate.score;
-            if input_syllable_count <= 3 then
+            if (input_syllable_count <= 3) and
+                ((input_syllable_count >= 2) or has_lightweight_context_source) then
             begin
                 Inc(Result, get_context_bonus(candidate.text));
                 if candidate.comment = '' then
@@ -20016,6 +20028,7 @@ var
         end;
 
         has_exact_complete_phrase_candidate := False;
+        has_lightweight_context_source := has_lightweight_context_source_local;
         latest_query_choice_text := '';
         latest_query_choice_prepared := False;
         for left_idx := 0 to High(candidates) do
@@ -20030,75 +20043,49 @@ var
 
         SetLength(unit_cache, Length(candidates));
         SetLength(rank_cache, Length(candidates));
+        SetLength(text_cache, Length(candidates));
         for left_idx := 0 to High(candidates) do
         begin
+            text_cache[left_idx] := candidates[left_idx].text;
             unit_cache[left_idx] := get_display_text_unit_count(
-                candidates[left_idx].text);
+                text_cache[left_idx]);
             rank_cache[left_idx] := get_lightweight_rank(candidates[left_idx],
                 unit_cache[left_idx]);
         end;
 
-        for left_idx := 0 to High(candidates) - 1 do
+        SetLength(order_cache, Length(candidates));
+        for left_idx := 0 to High(order_cache) do
         begin
-            left_units := unit_cache[left_idx];
-            left_score := rank_cache[left_idx];
-            for right_idx := left_idx + 1 to High(candidates) do
-            begin
-                right_units := unit_cache[right_idx];
-                right_score := rank_cache[right_idx];
-                if right_score > left_score then
-                begin
-                    tmp := candidates[left_idx];
-                    candidates[left_idx] := candidates[right_idx];
-                    candidates[right_idx] := tmp;
-                    tmp_units := unit_cache[left_idx];
-                    unit_cache[left_idx] := unit_cache[right_idx];
-                    unit_cache[right_idx] := tmp_units;
-                    tmp_rank := rank_cache[left_idx];
-                    rank_cache[left_idx] := rank_cache[right_idx];
-                    rank_cache[right_idx] := tmp_rank;
-                    left_units := right_units;
-                    left_score := right_score;
-                    Continue;
-                end;
-
-                if right_score = left_score then
-                begin
-                    if right_units > left_units then
-                    begin
-                        tmp := candidates[left_idx];
-                        candidates[left_idx] := candidates[right_idx];
-                        candidates[right_idx] := tmp;
-                        tmp_units := unit_cache[left_idx];
-                        unit_cache[left_idx] := unit_cache[right_idx];
-                        unit_cache[right_idx] := tmp_units;
-                        tmp_rank := rank_cache[left_idx];
-                        rank_cache[left_idx] := rank_cache[right_idx];
-                        rank_cache[right_idx] := tmp_rank;
-                        left_units := right_units;
-                        left_score := right_score;
-                        Continue;
-                    end;
-
-                    if (right_units = left_units) and
-                        (CompareText(candidates[right_idx].text, candidates[left_idx].text) < 0) then
-                    begin
-                        tmp := candidates[left_idx];
-                        candidates[left_idx] := candidates[right_idx];
-                        candidates[right_idx] := tmp;
-                        tmp_units := unit_cache[left_idx];
-                        unit_cache[left_idx] := unit_cache[right_idx];
-                        unit_cache[right_idx] := tmp_units;
-                        tmp_rank := rank_cache[left_idx];
-                        rank_cache[left_idx] := rank_cache[right_idx];
-                        rank_cache[right_idx] := tmp_rank;
-                        left_units := right_units;
-                        left_score := right_score;
-                        Continue;
-                    end;
-                end;
-            end;
+            order_cache[left_idx] := left_idx;
         end;
+        TArray.Sort<Integer>(order_cache, TComparer<Integer>.Construct(
+            function(const left_order: Integer; const right_order: Integer): Integer
+            begin
+                if rank_cache[left_order] > rank_cache[right_order] then
+                begin
+                    Exit(-1);
+                end;
+                if rank_cache[left_order] < rank_cache[right_order] then
+                begin
+                    Exit(1);
+                end;
+                if unit_cache[left_order] > unit_cache[right_order] then
+                begin
+                    Exit(-1);
+                end;
+                if unit_cache[left_order] < unit_cache[right_order] then
+                begin
+                    Exit(1);
+                end;
+                Result := CompareText(text_cache[left_order], text_cache[right_order]);
+            end));
+
+        SetLength(sorted_candidates, Length(candidates));
+        for left_idx := 0 to High(order_cache) do
+        begin
+            sorted_candidates[left_idx] := candidates[order_cache[left_idx]];
+        end;
+        candidates := sorted_candidates;
 
     end;
 
@@ -79441,9 +79428,15 @@ begin
         if has_raw_candidates and (not has_multi_syllable_input) then
         begin
             m_candidates := raw_candidates;
+            phase_start_tick := GetTickCount64;
             filter_non_bmp_single_char_candidates(m_candidates);
+            Inc(post_elapsed_ms, Int64(GetTickCount64 - phase_start_tick));
+            phase_start_tick := GetTickCount64;
             apply_user_penalties(lookup_text, m_candidates);
+            Inc(post_elapsed_ms, Int64(GetTickCount64 - phase_start_tick));
+            phase_start_tick := GetTickCount64;
             sort_candidates_lightweight(m_candidates);
+            Inc(sort_elapsed_ms, Int64(GetTickCount64 - phase_start_tick));
             limit := get_total_candidate_limit;
             if limit > c_candidate_total_limit_max then
             begin
