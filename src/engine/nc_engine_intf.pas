@@ -2445,6 +2445,8 @@ var
         var candidates: TncCandidateList); forward;
     procedure ensure_top_complete_candidate_prefix_partials_visible(
         var candidates: TncCandidateList); forward;
+    procedure demote_low_evidence_admin_place_alias_top_local(
+        var candidates: TncCandidateList); forward;
 
     function lookup_exact_full_pinyin_cached_local(const pinyin_key: string;
         out out_results: TncCandidateList): Boolean;
@@ -4049,6 +4051,13 @@ var
                 Exit;
             end;
 
+            if latest_from_dictionary_local and (not latest_from_session_local) and
+                (m_dictionary <> nil) and
+                m_dictionary.is_low_evidence_admin_place_alias_user_entry(
+                normalized_query_local, learned_text_local, '') then
+            begin
+                Exit;
+            end;
             if (not trusted_latest_choice_local) and
                 weak_learned_choice_is_blocked_by_strong_exact_local then
             begin
@@ -5608,6 +5617,7 @@ var
         ensure_short_full_query_exact_cluster_visible(m_candidates);
         ensure_bounded_single_char_partial_pool(m_candidates);
         ensure_top_complete_candidate_prefix_partials_visible(m_candidates);
+        demote_low_evidence_admin_place_alias_top_local(m_candidates);
         ensure_learned_exact_query_choice_visible_local(m_candidates);
         note_finalize_debug_elapsed_local('tfin_filter', phase_start_tick);
         phase_start_tick := GetTickCount64;
@@ -6658,6 +6668,7 @@ var
         ensure_short_full_query_exact_cluster_visible(m_candidates);
         ensure_bounded_single_char_partial_pool(m_candidates);
         ensure_top_complete_candidate_prefix_partials_visible(m_candidates);
+        demote_low_evidence_admin_place_alias_top_local(m_candidates);
         note_prefix_phase_elapsed_local('pfquality', phase_start_tick_local);
         if m_config.debug_mode then
         begin
@@ -7109,6 +7120,7 @@ var
         ensure_short_full_query_exact_cluster_visible(m_candidates);
         ensure_bounded_single_char_partial_pool(m_candidates);
         ensure_top_complete_candidate_prefix_partials_visible(m_candidates);
+        demote_low_evidence_admin_place_alias_top_local(m_candidates);
         note_preserved_phase_elapsed_local('psquality',
             preserved_phase_start_tick);
         total_elapsed_ms := Int64(GetTickCount64 - total_start_tick);
@@ -7367,6 +7379,12 @@ var
             end;
         end;
         if Trim(resolved_path_local) = '' then
+        begin
+            Exit;
+        end;
+        if (m_dictionary <> nil) and
+            m_dictionary.is_low_evidence_admin_place_alias_user_entry(
+            lookup_text, Trim(resolved_text_local), '') then
         begin
             Exit;
         end;
@@ -9750,9 +9768,11 @@ var
         normalized_query_local: string;
         cached_text_local: string;
         latest_text_local: string;
+        latest_from_session_local: Boolean;
     begin
         out_text := '';
         out_bonus := 0;
+        latest_from_session_local := False;
         normalized_query_local := normalize_pinyin_text(query_key);
         if (normalized_query_local = '') or
             (not should_allow_preferred_query_phrase_local(
@@ -9787,6 +9807,7 @@ var
             m_session_query_latest_text.TryGetValue(normalized_query_local,
             latest_text_local) then
         begin
+            latest_from_session_local := True;
         end
         else if (m_lookup_query_latest_text_cache <> nil) and
             m_lookup_query_latest_text_cache.TryGetValue(normalized_query_local,
@@ -9808,6 +9829,12 @@ var
         out_bonus := 0;
         Result := (out_text <> '') and
             (get_candidate_text_unit_count(out_text) = input_syllable_count);
+        if Result and (not latest_from_session_local) and (m_dictionary <> nil) and
+            m_dictionary.is_low_evidence_admin_place_alias_user_entry(
+            normalized_query_local, out_text, '') then
+        begin
+            Result := False;
+        end;
         if Result then
         begin
             out_bonus := m_dictionary.get_query_choice_bonus(
@@ -74196,6 +74223,85 @@ var
         candidates[0] := best_candidate_local;
     end;
 
+    procedure demote_low_evidence_admin_place_alias_top_local(
+        var candidates: TncCandidateList);
+    var
+        top_rank_local: Integer;
+        candidate_rank_local: Integer;
+        best_rank_local: Integer;
+        best_idx_local: Integer;
+        idx_local: Integer;
+        move_idx_local: Integer;
+        moved_candidate_local: TncCandidate;
+        moved_path_local: string;
+
+        function is_low_evidence_admin_alias_candidate_local(
+            const candidate: TncCandidate): Boolean;
+        begin
+            Result := (m_dictionary <> nil) and (lookup_text <> '') and
+                (Trim(candidate.comment) = '') and
+                m_dictionary.is_low_evidence_admin_place_alias_user_entry(
+                lookup_text, Trim(candidate.text), '');
+        end;
+    begin
+        if (Length(candidates) <= 1) or
+            (not is_low_evidence_admin_alias_candidate_local(candidates[0])) then
+        begin
+            Exit;
+        end;
+
+        top_rank_local := get_rank_score(candidates[0]);
+        best_idx_local := -1;
+        best_rank_local := Low(Integer);
+        for idx_local := 1 to High(candidates) do
+        begin
+            if (Trim(candidates[idx_local].comment) <> '') or
+                is_low_evidence_admin_alias_candidate_local(candidates[idx_local]) then
+            begin
+                Continue;
+            end;
+            candidate_rank_local := get_rank_score(candidates[idx_local]);
+            if candidate_rank_local > best_rank_local then
+            begin
+                best_rank_local := candidate_rank_local;
+                best_idx_local := idx_local;
+            end;
+        end;
+
+        if (best_idx_local <= 0) or (best_rank_local <= top_rank_local) then
+        begin
+            Exit;
+        end;
+
+        moved_candidate_local := candidates[best_idx_local];
+        moved_path_local := '';
+        if best_idx_local < Length(m_candidate_segment_paths) then
+        begin
+            moved_path_local := m_candidate_segment_paths[best_idx_local];
+        end;
+        for move_idx_local := best_idx_local downto 1 do
+        begin
+            candidates[move_idx_local] := candidates[move_idx_local - 1];
+            if move_idx_local < Length(m_candidate_segment_paths) then
+            begin
+                if (move_idx_local - 1) < Length(m_candidate_segment_paths) then
+                begin
+                    m_candidate_segment_paths[move_idx_local] :=
+                        m_candidate_segment_paths[move_idx_local - 1];
+                end
+                else
+                begin
+                    m_candidate_segment_paths[move_idx_local] := '';
+                end;
+            end;
+        end;
+        candidates[0] := moved_candidate_local;
+        if Length(m_candidate_segment_paths) > 0 then
+        begin
+            m_candidate_segment_paths[0] := moved_path_local;
+        end;
+    end;
+
 begin
     subspan_oracle_states := nil;
     subspan_oracle_texts := nil;
@@ -79014,6 +79120,7 @@ begin
         promote_full_query_exact_complete_phrase_local(m_candidates);
         ensure_high_quality_complete_candidate_in_top2(m_candidates);
         ensure_short_full_query_exact_cluster_visible(m_candidates);
+        demote_low_evidence_admin_place_alias_top_local(m_candidates);
         finalize_lookup_timing_info;
         if m_config.debug_mode then
         begin
@@ -79536,6 +79643,17 @@ var
     end;
 begin
     key := build_session_query_choice_key(m_last_lookup_key, candidate_text);
+    if (m_dictionary <> nil) and (m_last_lookup_key <> '') and
+        m_dictionary.is_low_evidence_admin_place_alias_user_entry(
+        m_last_lookup_key, candidate_text, '') then
+    begin
+        Result := 0;
+        if (key <> '') and (m_lookup_query_bonus_cache <> nil) then
+        begin
+            m_lookup_query_bonus_cache.AddOrSetValue(key, Result);
+        end;
+        Exit;
+    end;
     if (not is_current_latest_query_choice_local) and
         weak_choice_blocked_by_strong_exact_local then
     begin
@@ -82647,6 +82765,13 @@ var
     end;
 begin
     Result := candidate.score;
+    if (m_dictionary <> nil) and (m_last_lookup_key <> '') and
+        (candidate.comment = '') and
+        m_dictionary.is_low_evidence_admin_place_alias_user_entry(
+        m_last_lookup_key, candidate.text, '') then
+    begin
+        Dec(Result, 3000);
+    end;
     text_units := get_candidate_text_unit_count(candidate.text);
     is_single_syllable_single_char_lookup := (m_last_lookup_syllable_count = 1) and
         (candidate.comment = '') and (text_units = 1);

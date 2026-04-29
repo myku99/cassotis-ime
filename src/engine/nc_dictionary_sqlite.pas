@@ -141,6 +141,9 @@ type
         function lookup_full_pinyin_prefix(const pinyin_prefix: string;
             out results: TncCandidateList): Boolean; override;
         function single_char_matches_pinyin(const pinyin: string; const text_unit: string): Boolean; override;
+        function is_low_evidence_admin_place_alias_user_entry(const pinyin: string;
+            const text: string; const latest_choice_text: string = '';
+            const user_weight: Integer = -1; const commit_count: Integer = -1): Boolean; override;
         procedure begin_learning_batch; override;
         procedure commit_learning_batch; override;
         procedure rollback_learning_batch; override;
@@ -3900,6 +3903,187 @@ begin
     Result := True;
 end;
 
+function TncSqliteDictionary.is_low_evidence_admin_place_alias_user_entry(
+    const pinyin: string; const text: string; const latest_choice_text: string;
+    const user_weight: Integer; const commit_count: Integer): Boolean;
+const
+    base_longer_prefix_sql =
+        'SELECT pinyin, text FROM dict_base ' +
+        'WHERE pinyin >= ?1 AND pinyin < ?2 ' +
+        'ORDER BY weight DESC, text ASC LIMIT ?3';
+    user_weight_sql =
+        'SELECT COALESCE(MAX(weight), 0) FROM dict_user WHERE pinyin = ?1 AND text = ?2';
+    user_stats_sql =
+        'SELECT COALESCE(MAX(commit_count), 0) FROM dict_user_stats WHERE pinyin = ?1 AND text = ?2';
+    c_probe_limit = 64;
+
+    function is_administrative_place_suffix(const suffix_text: string): Boolean;
+    begin
+        Result := SameText(suffix_text, string(Char($533A))) or
+            SameText(suffix_text, string(Char($5340))) or
+            SameText(suffix_text, string(Char($53BF))) or
+            SameText(suffix_text, string(Char($7E23))) or
+            SameText(suffix_text, string(Char($5E02))) or
+            SameText(suffix_text, string(Char($9547))) or
+            SameText(suffix_text, string(Char($93AE))) or
+            SameText(suffix_text, string(Char($4E61))) or
+            SameText(suffix_text, string(Char($9109))) or
+            SameText(suffix_text, string(Char($6751))) or
+            SameText(suffix_text, string(Char($5DDE))) or
+            SameText(suffix_text, string(Char($7701))) or
+            SameText(suffix_text, string(Char($65D7))) or
+            SameText(suffix_text, string(Char($76DF))) or
+            SameText(suffix_text, string(Char($65B0)) + string(Char($533A))) or
+            SameText(suffix_text, string(Char($65B0)) + string(Char($5340))) or
+            SameText(suffix_text, string(Char($5730)) + string(Char($533A))) or
+            SameText(suffix_text, string(Char($5730)) + string(Char($5340))) or
+            SameText(suffix_text, string(Char($8857)) + string(Char($9053))) or
+            SameText(suffix_text, string(Char($81EA)) + string(Char($6CBB)) +
+            string(Char($533A))) or
+            SameText(suffix_text, string(Char($81EA)) + string(Char($6CBB)) +
+            string(Char($5340))) or
+            SameText(suffix_text, string(Char($81EA)) + string(Char($6CBB)) +
+            string(Char($5DDE))) or
+            SameText(suffix_text, string(Char($81EA)) + string(Char($6CBB)) +
+            string(Char($53BF))) or
+            SameText(suffix_text, string(Char($81EA)) + string(Char($6CBB)) +
+            string(Char($7E23))) or
+            SameText(suffix_text, string(Char($7279)) + string(Char($522B)) +
+            string(Char($884C)) + string(Char($653F)) + string(Char($533A))) or
+            SameText(suffix_text, string(Char($7279)) + string(Char($5225)) +
+            string(Char($884C)) + string(Char($653F)) + string(Char($5340)));
+    end;
+
+var
+    pinyin_key: string;
+    text_key: string;
+    stmt: Psqlite3_stmt;
+    step_result: Integer;
+    candidate_pinyin: string;
+    candidate_text: string;
+    candidate_prefix: string;
+    candidate_suffix: string;
+    query_syllable_count: Integer;
+    effective_user_weight: Integer;
+    effective_commit_count: Integer;
+
+    function read_max_int_value(const sql_text: string): Integer;
+    var
+        local_stmt: Psqlite3_stmt;
+    begin
+        Result := 0;
+        if (not m_user_ready) or (m_user_connection = nil) then
+        begin
+            Exit;
+        end;
+
+        local_stmt := nil;
+        try
+            if m_user_connection.prepare(sql_text, local_stmt) and
+                m_user_connection.bind_text(local_stmt, 1, pinyin_key) and
+                m_user_connection.bind_text(local_stmt, 2, text_key) and
+                (m_user_connection.step(local_stmt) = SQLITE_ROW) then
+            begin
+                Result := m_user_connection.column_int(local_stmt, 0);
+            end;
+        finally
+            if local_stmt <> nil then
+            begin
+                m_user_connection.finalize(local_stmt);
+            end;
+        end;
+    end;
+begin
+    Result := False;
+    pinyin_key := normalize_compact_pinyin_key(Trim(pinyin));
+    text_key := Trim(text);
+    if (pinyin_key = '') or (text_key = '') or (not m_base_ready) then
+    begin
+        Exit;
+    end;
+    if (user_weight > 1) or (commit_count > 1) then
+    begin
+        Exit;
+    end;
+    effective_user_weight := user_weight;
+    if effective_user_weight < 0 then
+    begin
+        effective_user_weight := read_max_int_value(user_weight_sql);
+    end;
+    effective_commit_count := commit_count;
+    if effective_commit_count < 0 then
+    begin
+        effective_commit_count := read_max_int_value(user_stats_sql);
+    end;
+    if (effective_user_weight > 1) or (effective_commit_count > 1) then
+    begin
+        Exit;
+    end;
+    if (latest_choice_text <> '') and SameText(Trim(latest_choice_text), text_key) then
+    begin
+        Exit;
+    end;
+    if (not is_full_pinyin_key(pinyin_key)) or
+        normalized_base_entry_exists(pinyin_key, text_key) or
+        (not has_any_base_phrase_for_pinyin(pinyin_key)) then
+    begin
+        Exit;
+    end;
+
+    query_syllable_count := Length(split_full_pinyin_syllables(pinyin_key));
+    if query_syllable_count <= 0 then
+    begin
+        Exit;
+    end;
+
+    stmt := nil;
+    try
+        if not m_base_connection.prepare(base_longer_prefix_sql, stmt) then
+        begin
+            Exit;
+        end;
+        if (not m_base_connection.bind_text(stmt, 1, pinyin_key)) or
+            (not m_base_connection.bind_text(stmt, 2, build_prefix_upper_bound(pinyin_key))) or
+            (not m_base_connection.bind_int(stmt, 3, c_probe_limit)) then
+        begin
+            Exit;
+        end;
+
+        step_result := m_base_connection.step(stmt);
+        while step_result = SQLITE_ROW do
+        begin
+            candidate_pinyin := normalize_compact_pinyin_key(
+                m_base_connection.column_text(stmt, 0));
+            candidate_text := Trim(m_base_connection.column_text(stmt, 1));
+            if (candidate_pinyin <> pinyin_key) and
+                (Copy(candidate_pinyin, 1, Length(pinyin_key)) = pinyin_key) and
+                (Length(split_full_pinyin_syllables(candidate_pinyin)) >
+                query_syllable_count) and
+                (get_text_unit_count_local(candidate_text) >
+                get_text_unit_count_local(text_key)) then
+            begin
+                candidate_prefix := copy_first_text_units(candidate_text,
+                    get_text_unit_count_local(text_key));
+                if candidate_prefix = text_key then
+                begin
+                    candidate_suffix := Copy(candidate_text,
+                        Length(candidate_prefix) + 1, MaxInt);
+                    if is_administrative_place_suffix(candidate_suffix) then
+                    begin
+                        Exit(True);
+                    end;
+                end;
+            end;
+            step_result := m_base_connection.step(stmt);
+        end;
+    finally
+        if stmt <> nil then
+        begin
+            m_base_connection.finalize(stmt);
+        end;
+    end;
+end;
+
 function TncSqliteDictionary.get_contains_popularity_score(const token: string): Integer;
 const
     query_sql = 'SELECT COALESCE(SUM(weight), 0) FROM dict_base WHERE instr(text, ?1) > 0';
@@ -5274,6 +5458,7 @@ var
         local_item: TncCandidate;
         effective_score: Integer;
         choice_bonus: Integer;
+        low_evidence_admin_alias: Boolean;
     begin
         key := Trim(candidate_text);
         if key = '' then
@@ -5283,12 +5468,21 @@ var
         effective_score := candidate_score;
         if (candidate_comment = '') and full_pinyin_query then
         begin
+            low_evidence_admin_alias := False;
             choice_bonus := get_query_choice_bonus(query_key, key);
-            if choice_bonus >= c_recent_explicit_user_choice_bonus_min then
+            if (choice_bonus >= c_recent_explicit_user_choice_bonus_min) or
+                ((latest_query_choice_text <> '') and SameText(latest_query_choice_text, key)) then
+            begin
+                low_evidence_admin_alias :=
+                    is_low_evidence_admin_place_alias_user_entry(query_key, key, '', -1, -1);
+            end;
+            if (not low_evidence_admin_alias) and
+                (choice_bonus >= c_recent_explicit_user_choice_bonus_min) then
             begin
                 Inc(effective_score, c_recent_explicit_user_choice_bonus);
             end;
-            if (latest_query_choice_text <> '') and SameText(latest_query_choice_text, key) then
+            if (not low_evidence_admin_alias) and
+                (latest_query_choice_text <> '') and SameText(latest_query_choice_text, key) then
             begin
                 Inc(effective_score, c_exact_latest_choice_bonus);
             end;
@@ -5389,6 +5583,24 @@ var
         suffix_text: string;
         pinyin_syllables: TArray<string>;
         prefix_limit: Integer;
+        prefix_score: Integer;
+
+        function get_admin_place_prefix_score(const parent_weight: Integer): Integer;
+        begin
+            Result := (parent_weight * 45) div 100;
+            if Result > 320 then
+            begin
+                Result := 320;
+            end;
+            if query_syllable_count <= 2 then
+            begin
+                Result := Min(Result, 180);
+            end;
+            if Result < 1 then
+            begin
+                Result := 1;
+            end;
+        end;
     begin
         if (not full_pinyin_query) or (query_syllable_count < 2) or
             (not m_base_ready) then
@@ -5450,7 +5662,8 @@ var
                     Continue;
                 end;
 
-                add_or_merge_candidate(prefix_text, '', prefix_candidate_weight, cs_rule);
+                prefix_score := get_admin_place_prefix_score(prefix_candidate_weight);
+                add_or_merge_candidate(prefix_text, '', prefix_score, cs_rule);
                 prefix_step_result := m_base_connection.step(prefix_stmt);
             end;
         finally
@@ -5621,6 +5834,11 @@ begin
                             Continue;
                         end;
                         if normalized_base_entry_exists(query_key, text_value) then
+                        begin
+                            Continue;
+                        end;
+                        if is_low_evidence_admin_place_alias_user_entry(query_key,
+                            text_value, '', score_value) then
                         begin
                             Continue;
                         end;
@@ -7844,6 +8062,13 @@ begin
                             Continue;
                         end;
                         score_value := m_user_connection.column_int(stmt, 1);
+                        if is_low_evidence_admin_place_alias_user_entry(query_key,
+                            text_value, '', score_value) then
+                        begin
+                            Inc(skipped_noisy_user_count);
+                            step_result := m_user_connection.step(stmt);
+                            Continue;
+                        end;
                         if should_suppress_constructed_user_phrase(query_key, text_value, 0, score_value) then
                         begin
                             Inc(skipped_noisy_user_count);
