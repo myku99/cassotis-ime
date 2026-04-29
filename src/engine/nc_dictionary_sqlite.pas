@@ -3309,6 +3309,50 @@ var
 
         Result := not saw_known_reading;
     end;
+
+    function can_match_with_target_unit_count(const pinyin_pos: Integer;
+        const unit_pos: Integer): Boolean;
+    const
+        c_max_syllable_len = 6;
+    var
+        remaining_units: Integer;
+        remaining_chars: Integer;
+        token_len: Integer;
+        token_text: string;
+    begin
+        if (pinyin_pos > Length(pinyin_key)) and (unit_pos > High(text_units)) then
+        begin
+            Exit(True);
+        end;
+        if (pinyin_pos > Length(pinyin_key)) or (unit_pos > High(text_units)) then
+        begin
+            Exit(False);
+        end;
+
+        remaining_units := Length(text_units) - unit_pos;
+        remaining_chars := Length(pinyin_key) - pinyin_pos + 1;
+        if (remaining_chars < remaining_units) or
+            (remaining_chars > remaining_units * c_max_syllable_len) then
+        begin
+            Exit(False);
+        end;
+
+        for token_len := 1 to Min(c_max_syllable_len, remaining_chars) do
+        begin
+            token_text := Copy(pinyin_key, pinyin_pos, token_len);
+            if (not is_single_syllable_full_pinyin_key(token_text)) or
+                (not text_unit_can_match_syllable(token_text, text_units[unit_pos])) then
+            begin
+                Continue;
+            end;
+            if can_match_with_target_unit_count(pinyin_pos + token_len, unit_pos + 1) then
+            begin
+                Exit(True);
+            end;
+        end;
+
+        Result := False;
+    end;
 begin
     Result := False;
     pinyin_key := LowerCase(Trim(pinyin));
@@ -3340,9 +3384,16 @@ begin
 
     syllables := split_full_pinyin_syllables(pinyin_key);
     text_units := split_text_units_local(text_key);
-    if (Length(syllables) <= 0) or
-        (Length(text_units) <> Length(syllables)) then
+    if Length(syllables) <= 0 then
     begin
+        Exit;
+    end;
+    if Length(text_units) <> Length(syllables) then
+    begin
+        // Compact pinyin can be segmented multiple ways without apostrophes.
+        // Validate against the committed text length before rejecting learned
+        // phrases such as yanquan -> 言泉.
+        Result := can_match_with_target_unit_count(1, 0);
         Exit;
     end;
 
@@ -6540,7 +6591,6 @@ var
         effective_source: TncCandidateSource;
         effective_has_dict_weight: Boolean;
         effective_dict_weight: Integer;
-        normalized_candidate_pinyin: string;
         choice_bonus: Integer;
     begin
         if text = '' then
@@ -6599,24 +6649,9 @@ var
         end;
 
         effective_source := source;
-        if (source = cs_user) and (candidate_pinyin_key <> '') then
-        begin
-            normalized_candidate_pinyin := normalize_compact_pinyin_key(
-                candidate_pinyin_key);
-            if (normalized_candidate_pinyin <> '') and
-                (not SameText(normalized_candidate_pinyin, query_key)) then
-            begin
-                effective_source := cs_rule;
-            end;
-        end;
 
         effective_has_dict_weight := (effective_source = cs_rule) and has_dict_weight;
         effective_dict_weight := dict_weight;
-        if (source = cs_user) and (effective_source = cs_rule) then
-        begin
-            effective_has_dict_weight := True;
-            effective_dict_weight := Max(dict_weight, score_with_bonus);
-        end;
 
         item.text := text;
         item.comment := comment;
@@ -8333,7 +8368,7 @@ begin
                                 end;
 
                                 text_value := m_base_connection.column_text(stmt, 1);
-                                if full_pinyin_query and
+                                if full_pinyin_query and (not full_query_dual_jianpin_mode) and
                                     (not strict_full_pinyin_text_alignment_valid(
                                     query_key, text_value)) then
                                 begin
@@ -8416,7 +8451,7 @@ begin
                                 end;
 
                                 text_value := m_base_connection.column_text(stmt, 1);
-                                if full_pinyin_query and
+                                if full_pinyin_query and (not full_query_dual_jianpin_mode) and
                                     (not strict_full_pinyin_text_alignment_valid(
                                     query_key, text_value)) then
                                 begin
@@ -9455,6 +9490,7 @@ var
     learning_floor_bonus: Integer;
     latest_choice_text: string;
     latest_bonus: Integer;
+    has_latest_choice_match: Boolean;
 begin
     Result := 0;
     normalized_query := LowerCase(Trim(query_key));
@@ -9484,13 +9520,12 @@ begin
     end;
 
     latest_bonus := 0;
+    has_latest_choice_match := False;
     latest_choice_text := get_query_latest_choice_text(normalized_query);
     if (latest_choice_text <> '') and SameText(latest_choice_text, text_key) then
     begin
-        // Latest explicit exact-query choice must work even when the stats row
-        // is missing, otherwise single-character learning disappears on restart.
+        has_latest_choice_match := True;
         latest_bonus := c_latest_query_choice_bonus;
-        Result := latest_bonus;
     end;
 
     try
@@ -9512,6 +9547,14 @@ begin
         step_result := m_user_connection.step(m_stmt_query_choice_bonus);
         if step_result <> SQLITE_ROW then
         begin
+            // Latest explicit exact-query choice must work even when the stats
+            // row is missing, otherwise single-character learning can disappear
+            // on restart. When a stats row exists, use its decayed score instead
+            // so stale one-off choices do not permanently override base entries.
+            if has_latest_choice_match then
+            begin
+                Result := latest_bonus;
+            end;
             Exit;
         end;
 
@@ -9607,12 +9650,9 @@ begin
             Result := 0;
         end;
 
-        if latest_bonus > 0 then
-        begin
-            // The user's latest explicit correction for the exact pinyin should
-            // beat older repeated mistakes after a TSF restart.
-            Inc(Result, latest_bonus);
-        end;
+        // Do not add latest_bonus on top of a stats-backed score here. Exact
+        // lookup applies an additional latest-choice promotion only while the
+        // decayed stats score is still recent enough.
     finally
         if m_stmt_query_choice_bonus <> nil then
         begin
@@ -9705,8 +9745,9 @@ begin
 
             if (not use_fallback_scan) and
                 ((candidate_text = '') or
+                (is_full_pinyin_key(normalized_query) and
                 (not full_pinyin_text_alignment_valid(normalized_query,
-                candidate_text)) or
+                candidate_text))) or
                 (get_candidate_penalty(normalized_query, candidate_text) > 0)) then
             begin
                 use_fallback_scan := True;
@@ -9756,8 +9797,9 @@ begin
                             end;
                         end;
 
-                        if full_pinyin_text_alignment_valid(normalized_query,
-                            candidate_text) and
+                        if ((not is_full_pinyin_key(normalized_query)) or
+                            full_pinyin_text_alignment_valid(normalized_query,
+                            candidate_text)) and
                             (get_candidate_penalty(normalized_query,
                             candidate_text) <= 0) then
                         begin

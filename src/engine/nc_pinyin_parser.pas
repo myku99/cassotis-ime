@@ -143,7 +143,11 @@ var
                 Exit(100);
             end;
 
-            Result := 60;
+            // Multi-letter zero-initial finals (ao/an/ou/...) often occur after
+            // n/ng without an apostrophe in real input, e.g. beijing+aoyun.
+            // Keep the heavy penalty only for bare a/e/o; otherwise the parser
+            // prefers jin+gao over jing+ao and poisons long-sentence paths.
+            Result := 20;
         end;
     begin
         if start_index >= text_length then
