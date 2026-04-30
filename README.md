@@ -87,6 +87,27 @@ Main rebuild entry:
 .\rebuild_dict.ps1
 ```
 
+## Long Sentence Benchmark Results
+See [BENCHMARK.md](BENCHMARK.md) for the benchmark methodology, corpus source, input modes, and metric definitions.
+
+Corpus: first 100 eligible sentences from the developer's own novel **Eternal Dance** (Chinese title: **永恒的舞动**).
+
+Dictionary/runtime data: the comparison below uses the same runtime dictionary and user dictionary for both versions.
+
+### Whole-Sentence Direct
+
+| Version | Top1 | Top2 | Average latency | P95 latency | Max latency |
+|---|---:|---:|---:|---:|---:|
+| `v0.3.0` | 79/100 (79.00%) | 88/100 (88.00%) | 380.28 ms | 765 ms | 906 ms |
+| `v0.2.0` | 38/100 (38.00%) | 41/100 (41.00%) | 216.08 ms | 641 ms | 875 ms |
+
+### Incremental Input
+
+| Version | Top1 | Top2 | Average latency | P95 latency | Max latency |
+|---|---:|---:|---:|---:|---:|
+| `v0.3.0` | 62/100 (62.00%) | 70/100 (70.00%) | 3439.07 ms | 8219 ms | 14953 ms |
+| `v0.2.0` | 38/100 (38.00%) | 41/100 (41.00%) | 3383.27 ms | 9391 ms | 15031 ms |
+
 ## Configuration
 Default config file:
 - `%LOCALAPPDATA%\CassotisIme\cassotis_ime.ini`
