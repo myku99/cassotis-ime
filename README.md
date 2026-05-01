@@ -88,25 +88,14 @@ Main rebuild entry:
 ```
 
 ## Long Sentence Benchmark Results
-See [BENCHMARK.md](BENCHMARK.md) for the benchmark methodology, corpus source, input modes, and metric definitions.
+See [BENCHMARK.md](BENCHMARK.md) for the Benchmark-16300 methodology, corpus source, and scoring rules.
 
-Corpus: first 100 eligible sentences from the developer's own novel **Eternal Dance** (Chinese title: **永恒的舞动**).
+Corpus: 16,300 eligible Chinese sentences from the developer's own novel [**Elegance in Timelessness**](https://www.qidian.com/book/1037259117/) (Chinese title: [**永恒的舞动**](https://www.qidian.com/book/1037259117/)).
 
-Dictionary/runtime data: the comparison below uses the same runtime dictionary and user dictionary for both versions.
-
-### Whole-Sentence Direct
-
-| Version | Top1 | Top2 | Average latency | P95 latency | Max latency |
-|---|---:|---:|---:|---:|---:|
-| `v0.3.0` | 79/100 (79.00%) | 88/100 (88.00%) | 380.28 ms | 765 ms | 906 ms |
-| `v0.2.0` | 38/100 (38.00%) | 41/100 (41.00%) | 216.08 ms | 641 ms | 875 ms |
-
-### Incremental Input
-
-| Version | Top1 | Top2 | Average latency | P95 latency | Max latency |
-|---|---:|---:|---:|---:|---:|
-| `v0.3.0` | 62/100 (62.00%) | 70/100 (70.00%) | 3439.07 ms | 8219 ms | 14953 ms |
-| `v0.2.0` | 38/100 (38.00%) | 41/100 (41.00%) | 3383.27 ms | 9391 ms | 15031 ms |
+| Version | Top1 | Top2 |
+|---|---:|---:|
+| `v0.3.1` | 3845/16300 (23.59%) | 4651/16300 (28.53%) |
+| `v0.2.0` | 2671/16300 (16.39%) | 2863/16300 (17.56%) |
 
 ## Configuration
 Default config file:
