@@ -2445,6 +2445,46 @@ var
     should_hide: Boolean;
     caret_point: TPoint;
     has_caret: Boolean;
+
+    function candidate_has_pinyin_tail(const candidate: TncCandidate): Boolean;
+    var
+        text_value: string;
+        idx: Integer;
+        has_tail: Boolean;
+    begin
+        Result := False;
+        if Trim(candidate.comment) <> '' then
+        begin
+            Result := True;
+            Exit;
+        end;
+
+        text_value := Trim(candidate.text);
+        if text_value = '' then
+        begin
+            Exit;
+        end;
+
+        has_tail := False;
+        idx := Length(text_value);
+        while idx > 0 do
+        begin
+            if not CharInSet(text_value[idx], ['a' .. 'z', 'A' .. 'Z']) then
+            begin
+                Break;
+            end;
+            has_tail := True;
+            Dec(idx);
+        end;
+
+        Result := has_tail and (idx > 0);
+    end;
+
+    function candidate_can_remove(const candidate: TncCandidate): Boolean;
+    begin
+        Result := (candidate.source = cs_user) and (Trim(candidate.text) <> '') and
+            (not candidate_has_pinyin_tail(candidate));
+    end;
 begin
     if session_id = '' then
     begin
@@ -2473,9 +2513,9 @@ begin
             Exit;
         end;
 
-        if session.m_candidates[candidate_index].source <> cs_user then
+        if not candidate_can_remove(session.m_candidates[candidate_index]) then
         begin
-            host_log_debug('[DEBUG] remove user candidate skipped: source is not cs_user');
+            host_log_debug('[DEBUG] remove user candidate skipped: candidate is not removable');
             Exit;
         end;
 

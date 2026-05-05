@@ -73,6 +73,8 @@ type
         function get_target_dpi(const anchor: TPoint): Integer;
         function get_work_area(const anchor: TPoint; out work_area: TRect): Boolean;
         function format_candidate_line(const index: Integer; const candidate: TncCandidate): string;
+        function candidate_has_pinyin_tail(const candidate: TncCandidate): Boolean;
+        function candidate_can_remove(const candidate: TncCandidate): Boolean;
         function get_candidate_text_color(const source: TncCandidateSource): TColor;
         function get_selected_candidate_text_color(const source: TncCandidateSource): TColor;
         function hit_test_candidate_index(const point: TPoint): Integer;
@@ -713,6 +715,46 @@ begin
     Result := IntToStr(index + 1) + '. ' + suffix;
 end;
 
+function TncCandidateWindow.candidate_has_pinyin_tail(const candidate: TncCandidate): Boolean;
+var
+    text_value: string;
+    idx: Integer;
+    has_tail: Boolean;
+begin
+    Result := False;
+    if Trim(candidate.comment) <> '' then
+    begin
+        Result := True;
+        Exit;
+    end;
+
+    text_value := Trim(candidate.text);
+    if text_value = '' then
+    begin
+        Exit;
+    end;
+
+    has_tail := False;
+    idx := Length(text_value);
+    while idx > 0 do
+    begin
+        if not CharInSet(text_value[idx], ['a' .. 'z', 'A' .. 'Z']) then
+        begin
+            Break;
+        end;
+        has_tail := True;
+        Dec(idx);
+    end;
+
+    Result := has_tail and (idx > 0);
+end;
+
+function TncCandidateWindow.candidate_can_remove(const candidate: TncCandidate): Boolean;
+begin
+    Result := (candidate.source = cs_user) and (Trim(candidate.text) <> '') and
+        (not candidate_has_pinyin_tail(candidate));
+end;
+
 function TncCandidateWindow.get_candidate_text_color(const source: TncCandidateSource): TColor;
 begin
     case source of
@@ -1084,7 +1126,7 @@ begin
         for i := 0 to count - 1 do
         begin
             m_candidate_sources[i] := candidates[i].source;
-            m_candidate_is_user[i] := candidates[i].source = cs_user;
+            m_candidate_is_user[i] := candidate_can_remove(candidates[i]);
             m_candidate_show_weight[i] := m_debug_mode and (candidates[i].source = cs_rule);
             if m_candidate_show_weight[i] then
             begin
