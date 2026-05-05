@@ -3965,6 +3965,14 @@ var
     pinyin_key: string;
 begin
     Result := False;
+    if user_weight > 0 then
+    begin
+        // dict_user rows represent explicit user-word confirmations. Keep
+        // them before generic composed-phrase suppression; otherwise explicit
+        // multi-segment selections are pruned on reopen.
+        Exit(False);
+    end;
+
     if should_suppress_exact_query_learning(pinyin, text) then
     begin
         Exit(True);
@@ -3973,14 +3981,6 @@ begin
     if not is_suppressible_nonbase_exact_phrase(pinyin, text) then
     begin
         Exit;
-    end;
-
-    if user_weight > 0 then
-    begin
-        // dict_user rows represent explicit user-word confirmations. Keep
-        // them even when the same pinyin bucket already has a base phrase;
-        // otherwise cross-session learning is pruned on reopen.
-        Exit(False);
     end;
 
     pinyin_key := LowerCase(Trim(pinyin));
@@ -8937,7 +8937,8 @@ begin
 
     base_entry_exists := normalized_base_entry_exists(pinyin_key, text);
     suppress_exact_query_user_row := invalid_full_pinyin_alignment or
-        (full_pinyin_input and should_suppress_exact_query_learning(pinyin_key, text));
+        (full_pinyin_input and (not explicit_choice) and
+        should_suppress_exact_query_learning(pinyin_key, text));
 
     // A positive explicit selection for the same query/text pair should
     // cancel any earlier "remove candidate" feedback for that exact pair.
