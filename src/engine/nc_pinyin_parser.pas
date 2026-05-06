@@ -74,6 +74,17 @@ var
 
     function is_initial_final_compatible(const initial_value: string; const final_value: string): Boolean;
     begin
+        // b/p/m/f/w can take bare "u" (bu/pu/mu/fu/wu), but not medial-u
+        // finals such as ue/uan/uai/uo. Without this, missing-apostrophe input
+        // like "bue" is greedily parsed as invalid "bue" instead of "bu"+"e".
+        if ((initial_value = 'b') or (initial_value = 'p') or
+            (initial_value = 'm') or (initial_value = 'f') or
+            (initial_value = 'w')) and
+            (Length(final_value) > 1) and (final_value[1] = 'u') then
+        begin
+            Exit(False);
+        end;
+
         // Restrict obviously invalid retroflex/alveolar combinations to avoid
         // greedy wrong splits like "zhineng" -> "zhin + eng" (expected "zhi + neng").
         if (initial_value = 'zh') or (initial_value = 'ch') or (initial_value = 'sh') or
