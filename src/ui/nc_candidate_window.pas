@@ -1127,10 +1127,10 @@ begin
         begin
             m_candidate_sources[i] := candidates[i].source;
             m_candidate_is_user[i] := candidate_can_remove(candidates[i]);
-            m_candidate_show_weight[i] := m_debug_mode and (candidates[i].source = cs_rule);
+            m_candidate_show_weight[i] := m_debug_mode and candidates[i].has_dict_weight;
             if m_candidate_show_weight[i] then
             begin
-                m_candidate_weight_lines.Add(IntToStr(candidates[i].score));
+                m_candidate_weight_lines.Add(IntToStr(candidates[i].dict_weight));
             end
             else
             begin

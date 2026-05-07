@@ -84,7 +84,6 @@ type
         function get_valid_cjk_codepoint_count(const text: string): Integer;
         function is_valid_learning_text(const text: string): Boolean;
         function is_valid_user_text(const text: string): Boolean;
-        function is_boundary_noise_user_phrase(const pinyin: string; const text: string): Boolean;
         function is_valid_learning_path(const encoded_path: string): Boolean;
         function get_contains_popularity_score(const token: string): Integer;
         function get_prefix_popularity_score(const prefix: string): Integer;
@@ -2840,79 +2839,6 @@ begin
     codepoint_count := get_valid_cjk_codepoint_count(text);
     // User dictionary should store phrase learning only, not single-character commits.
     Result := (codepoint_count >= 2) and (codepoint_count <= c_user_text_max_codepoints);
-end;
-
-function TncSqliteDictionary.is_boundary_noise_user_phrase(const pinyin: string;
-    const text: string): Boolean;
-var
-    pinyin_key: string;
-    text_key: string;
-    syllables: TArray<string>;
-    text_units: TArray<string>;
-
-    function is_leading_boundary_unit(const syllable_text: string;
-        const text_unit: string): Boolean;
-    begin
-        Result := False;
-        if get_valid_cjk_codepoint_count(text_unit) <> 1 then
-        begin
-            Exit;
-        end;
-
-        if SameText(syllable_text, 'de') then
-        begin
-            case Ord(text_unit[1]) of
-                $7684, $5730, $5F97:
-                    Exit(True);
-            end;
-        end
-        else if SameText(syllable_text, 'le') and
-            (Ord(text_unit[1]) = $4E86) then
-        begin
-            Exit(True);
-        end
-        else if SameText(syllable_text, 'zhe') and
-            (Ord(text_unit[1]) = $7740) then
-        begin
-            Exit(True);
-        end;
-    end;
-
-    function is_trailing_boundary_unit(const syllable_text: string;
-        const text_unit: string): Boolean;
-    begin
-        Result := is_leading_boundary_unit(syllable_text, text_unit);
-        if Result then
-        begin
-            Exit;
-        end;
-
-        if SameText(syllable_text, 'zai') and
-            (get_valid_cjk_codepoint_count(text_unit) = 1) and
-            (Ord(text_unit[1]) = $518D) then
-        begin
-            Result := True;
-        end;
-    end;
-begin
-    Result := False;
-    pinyin_key := normalize_compact_pinyin_key(pinyin);
-    text_key := Trim(text);
-    if (pinyin_key = '') or (text_key = '') or
-        (not is_full_pinyin_key(pinyin_key)) then
-    begin
-        Exit;
-    end;
-
-    syllables := split_full_pinyin_syllables(pinyin_key);
-    text_units := split_text_units_local(text_key);
-    if (Length(syllables) <> Length(text_units)) or (Length(text_units) < 2) then
-    begin
-        Exit;
-    end;
-
-    Result := is_leading_boundary_unit(syllables[0], text_units[0]) or
-        is_trailing_boundary_unit(syllables[High(syllables)], text_units[High(text_units)]);
 end;
 
 function TncSqliteDictionary.is_valid_learning_path(const encoded_path: string): Boolean;
@@ -8857,10 +8783,6 @@ begin
             begin
                 purge_user_entry_internal(pinyin_value, text_value, False, False);
             end
-            else if is_boundary_noise_user_phrase(pinyin_value, text_value) then
-            begin
-                purge_user_entry_internal(pinyin_value, text_value, False, False);
-            end
             else if should_suppress_constructed_user_phrase(pinyin_value, text_value,
                 commit_count, user_weight) then
             begin
@@ -8927,14 +8849,6 @@ begin
         (not full_pinyin_text_alignment_valid(pinyin_key, text));
     if invalid_full_pinyin_alignment then
     begin
-        purge_user_entry_internal(pinyin_key, text, False, False);
-        Exit;
-    end;
-    if is_boundary_noise_user_phrase(pinyin_key, text) then
-    begin
-        // Long-sentence commits can cross phrase boundaries and produce
-        // boundary-crossing fragments from long-sentence commits. These should not become
-        // persisted query choices or user words.
         purge_user_entry_internal(pinyin_key, text, False, False);
         Exit;
     end;
