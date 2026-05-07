@@ -85,6 +85,31 @@ var
             Exit(False);
         end;
 
+        // y/w are spelling helpers in pinyin. Do not accept non-standard
+        // expanded spellings such as yian/wuan; otherwise compact input with a
+        // missing apostrophe is greedily merged and the intended syllables never
+        // reach the engine lattice.
+        if initial_value = 'y' then
+        begin
+            if (final_value = 'ia') or (final_value = 'ian') or
+                (final_value = 'iang') or (final_value = 'iao') or
+                (final_value = 'ie') or (final_value = 'iong') or
+                (final_value = 'iu') then
+            begin
+                Exit(False);
+            end;
+        end
+        else if initial_value = 'w' then
+        begin
+            if (final_value = 'ua') or (final_value = 'uai') or
+                (final_value = 'uan') or (final_value = 'uang') or
+                (final_value = 'ui') or (final_value = 'un') or
+                (final_value = 'uo') then
+            begin
+                Exit(False);
+            end;
+        end;
+
         // Restrict obviously invalid retroflex/alveolar combinations to avoid
         // greedy wrong splits like "zhineng" -> "zhin + eng" (expected "zhi + neng").
         if (initial_value = 'zh') or (initial_value = 'ch') or (initial_value = 'sh') or
