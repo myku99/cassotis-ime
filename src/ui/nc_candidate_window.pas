@@ -14,6 +14,7 @@ uses
     Winapi.Windows,
     Winapi.Messages,
     Winapi.MultiMon,
+    Winapi.TlHelp32,
     nc_types;
 
 type
@@ -74,6 +75,7 @@ type
         procedure apply_dpi(const dpi: Integer);
         function get_target_dpi(const anchor: TPoint): Integer;
         function get_work_area(const anchor: TPoint; out work_area: TRect): Boolean;
+        function get_shell_search_overlay_rect(out overlay_rect: TRect): Boolean;
         function format_candidate_line(const index: Integer; const candidate: TncCandidate): string;
         function candidate_has_pinyin_tail(const candidate: TncCandidate): Boolean;
         function candidate_can_remove(const candidate: TncCandidate): Boolean;
@@ -117,6 +119,11 @@ var
     g_vcl_initialized: Boolean = False;
     g_get_dpi_for_window_ready: Boolean = False;
     g_get_dpi_for_window: TGetDpiForWindow = nil;
+    g_shell_overlay_cache_hwnd: HWND = 0;
+    g_shell_overlay_cache_tick: DWORD = 0;
+    g_shell_overlay_cache_is_shell: Boolean = False;
+    g_shell_overlay_cache_has_rect: Boolean = False;
+    g_shell_overlay_cache_rect: TRect = (Left: 0; Top: 0; Right: 0; Bottom: 0);
 
 const
     c_candidate_text_height_sample = 'Hg' + WideChar($56FD);
@@ -149,6 +156,64 @@ begin
     end;
 
     Result := c_default_candidate_font_name;
+end;
+
+function get_window_process_image_name(const hwnd: HWND): string;
+var
+    process_id: DWORD;
+    snapshot: THandle;
+    entry: TProcessEntry32;
+begin
+    Result := '';
+    if hwnd = 0 then
+    begin
+        Exit;
+    end;
+
+    process_id := 0;
+    GetWindowThreadProcessId(hwnd, @process_id);
+    if process_id = 0 then
+    begin
+        Exit;
+    end;
+
+    snapshot := CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if snapshot = INVALID_HANDLE_VALUE then
+    begin
+        Exit;
+    end;
+    try
+        ZeroMemory(@entry, SizeOf(entry));
+        entry.dwSize := SizeOf(entry);
+        if Process32First(snapshot, entry) then
+        begin
+            repeat
+                if entry.th32ProcessID = process_id then
+                begin
+                    Result := LowerCase(string(entry.szExeFile));
+                    Exit;
+                end;
+            until not Process32Next(snapshot, entry);
+        end;
+    finally
+        CloseHandle(snapshot);
+    end;
+end;
+
+function is_shell_search_surface_process(const process_name: string): Boolean;
+begin
+    Result := SameText(process_name, 'searchhost.exe') or
+        SameText(process_name, 'searchapp.exe') or
+        SameText(process_name, 'startmenuexperiencehost.exe') or
+        SameText(process_name, 'shellexperiencehost.exe') or
+        SameText(process_name, 'textinputhost.exe');
+end;
+
+function rects_overlap(const left_rect: TRect; const right_rect: TRect): Boolean;
+var
+    intersection: TRect;
+begin
+    Result := IntersectRect(intersection, left_rect, right_rect);
 end;
 
 function draw_canvas_text(const canvas: TCanvas; const text: string; var bounds: TRect; const flags: UINT): Integer;
@@ -348,7 +413,7 @@ end;
 procedure TncCandidateWindow.CreateParams(var Params: TCreateParams);
 begin
     inherited CreateParams(Params);
-    Params.ExStyle := Params.ExStyle or WS_EX_NOACTIVATE or WS_EX_TOOLWINDOW;
+    Params.ExStyle := Params.ExStyle or WS_EX_NOACTIVATE or WS_EX_TOOLWINDOW or WS_EX_TOPMOST;
 end;
 
 procedure TncCandidateWindow.WMMouseActivate(var Message: TMessage);
@@ -798,6 +863,59 @@ begin
     end;
 
     Result := SystemParametersInfo(SPI_GETWORKAREA, 0, @work_area, 0);
+end;
+
+function TncCandidateWindow.get_shell_search_overlay_rect(out overlay_rect: TRect): Boolean;
+var
+    foreground_hwnd: HWND;
+    process_name: string;
+    now_tick: DWORD;
+begin
+    Result := False;
+    foreground_hwnd := GetForegroundWindow;
+    if foreground_hwnd = 0 then
+    begin
+        Exit;
+    end;
+
+    foreground_hwnd := GetAncestor(foreground_hwnd, GA_ROOT);
+    if foreground_hwnd = 0 then
+    begin
+        Exit;
+    end;
+
+    now_tick := GetTickCount;
+    if (foreground_hwnd = g_shell_overlay_cache_hwnd) and
+        (DWORD(now_tick - g_shell_overlay_cache_tick) < 250) then
+    begin
+        if g_shell_overlay_cache_is_shell and g_shell_overlay_cache_has_rect then
+        begin
+            overlay_rect := g_shell_overlay_cache_rect;
+            Result := True;
+        end;
+        Exit;
+    end;
+
+    g_shell_overlay_cache_hwnd := foreground_hwnd;
+    g_shell_overlay_cache_tick := now_tick;
+    g_shell_overlay_cache_is_shell := False;
+    g_shell_overlay_cache_has_rect := False;
+    g_shell_overlay_cache_rect := Rect(0, 0, 0, 0);
+
+    process_name := get_window_process_image_name(foreground_hwnd);
+    g_shell_overlay_cache_is_shell := is_shell_search_surface_process(process_name);
+    if (not g_shell_overlay_cache_is_shell) or (not IsWindowVisible(foreground_hwnd)) or
+        (not GetWindowRect(foreground_hwnd, overlay_rect)) then
+    begin
+        Exit;
+    end;
+
+    Result := (overlay_rect.Right > overlay_rect.Left) and (overlay_rect.Bottom > overlay_rect.Top);
+    g_shell_overlay_cache_has_rect := Result;
+    if Result then
+    begin
+        g_shell_overlay_cache_rect := overlay_rect;
+    end;
 end;
 
 function TncCandidateWindow.format_candidate_line(const index: Integer; const candidate: TncCandidate): string;
@@ -1413,6 +1531,8 @@ var
     target_y: Integer;
     dpi: Integer;
     gap: Integer;
+    overlay_rect: TRect;
+    candidate_rect: TRect;
 begin
     HandleNeeded;
     anchor := Point(x, y);
@@ -1455,11 +1575,38 @@ begin
         target_x := work_area.Left;
     end;
 
+    if get_shell_search_overlay_rect(overlay_rect) then
+    begin
+        candidate_rect := Rect(target_x, target_y, target_x + Width, target_y + Height);
+        if rects_overlap(candidate_rect, overlay_rect) then
+        begin
+            if overlay_rect.Top - Height - gap >= work_area.Top then
+            begin
+                target_y := overlay_rect.Top - Height - gap;
+            end
+            else if overlay_rect.Bottom + gap + Height <= work_area.Bottom then
+            begin
+                target_y := overlay_rect.Bottom + gap;
+            end
+            else if overlay_rect.Left - Width - gap >= work_area.Left then
+            begin
+                target_x := overlay_rect.Left - Width - gap;
+                target_y := Max(work_area.Top, Min(target_y, work_area.Bottom - Height));
+            end
+            else if overlay_rect.Right + gap + Width <= work_area.Right then
+            begin
+                target_x := overlay_rect.Right + gap;
+                target_y := Max(work_area.Top, Min(target_y, work_area.Bottom - Height));
+            end;
+        end;
+    end;
+
     Left := target_x;
     Top := target_y;
     flags := SWP_NOACTIVATE or SWP_NOSIZE or SWP_SHOWWINDOW;
-    SetWindowPos(Handle, HWND_TOPMOST, Left, Top, 0, 0, flags);
+    SetWindowPos(Handle, HWND_TOPMOST, target_x, target_y, 0, 0, flags);
     ShowWindow(Handle, SW_SHOWNOACTIVATE);
+    SetWindowPos(Handle, HWND_TOPMOST, target_x, target_y, 0, 0, flags);
 end;
 
 procedure TncCandidateWindow.hide_window;
