@@ -134,6 +134,19 @@ var
             end;
         end;
 
+        // These initials do not form standard iang/iong syllables. Allowing
+        // synthetic forms like "diang" makes compact streams such as
+        // "dian+geng" tie with the wrong "diang+eng" parse.
+        if ((initial_value = 'b') or (initial_value = 'p') or
+            (initial_value = 'm') or (initial_value = 'f') or
+            (initial_value = 'd') or (initial_value = 't') or
+            (initial_value = 'g') or (initial_value = 'k') or
+            (initial_value = 'h')) and
+            ((final_value = 'iang') or (final_value = 'iong')) then
+        begin
+            Exit(False);
+        end;
+
         Result := True;
     end;
 

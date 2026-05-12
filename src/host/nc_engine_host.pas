@@ -37,12 +37,14 @@ type
         m_selected_index: Integer;
         m_preedit_text: string;
         m_candidate_dirty: Boolean;
+        m_candidate_generation: UInt64;
         m_pending_candidate_caret: TPoint;
         m_pending_candidate_has_caret: Boolean;
         m_pending_candidate_line_height: Integer;
         m_pending_candidate_terminal_like_target: Boolean;
         m_pending_candidate_source: TncCaretAnchorSource;
         m_pending_candidate_score: Integer;
+        m_pending_candidate_generation: UInt64;
         m_candidate_apply_queued: Boolean;
         m_last_candidate_source: TncCaretAnchorSource;
         m_last_candidate_score: Integer;
@@ -59,20 +61,22 @@ type
             const terminal_like_target: Boolean);
         function needs_candidate_refresh(const point: TPoint; const has_caret: Boolean; const line_height: Integer;
             const terminal_like_target: Boolean): Boolean;
+        function candidate_generation: UInt64;
         procedure store_candidates(const candidates: TncCandidateList; const page_index: Integer;
             const page_count: Integer; const selected_index: Integer; const preedit_text: string);
         procedure clear_candidates;
         function has_candidates: Boolean;
         function has_dirty_candidates: Boolean;
-        procedure apply_candidate_content_only;
+        procedure apply_candidate_content_only(const candidate_generation: UInt64);
         procedure apply_candidate_state(const caret: TPoint; const has_caret: Boolean; const line_height: Integer;
-            const terminal_like_target: Boolean; const source: TncCaretAnchorSource; const anchor_score: Integer);
+            const terminal_like_target: Boolean; const source: TncCaretAnchorSource; const anchor_score: Integer;
+            const candidate_generation: UInt64);
         procedure stage_candidate_apply(const caret: TPoint; const has_caret: Boolean; const line_height: Integer;
             const terminal_like_target: Boolean; const source: TncCaretAnchorSource; const anchor_score: Integer;
             out should_queue: Boolean);
         function consume_pending_candidate_apply(out caret: TPoint; out has_caret: Boolean;
             out line_height: Integer; out terminal_like_target: Boolean; out source: TncCaretAnchorSource;
-            out anchor_score: Integer): Boolean;
+            out anchor_score: Integer; out candidate_generation: UInt64): Boolean;
         procedure hide_candidate_window;
         property engine: TncEngine read m_engine;
         property last_caret: TPoint read m_last_caret;
@@ -186,8 +190,7 @@ const
     c_user_dict_checkpoint_retry_ms = 5000;
     c_tray_host_mutex_name_format = 'Local\cassotis_ime_tray_host_v1_s%d';
     c_tray_host_restart_min_interval_ms = 800;
-    // Windows shell search surfaces run with AppContainer-style tokens; AC/S-1-15-2-2 keep IPC reachable there.
-    c_ipc_security_sddl = 'D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;GRGW;;;AU)(A;;GRGW;;;AC)(A;;GRGW;;;S-1-15-2-2)S:(ML;;NW;;;LW)';
+    c_ipc_security_sddl = 'D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;GRGW;;;AU)S:(ML;;NW;;;LW)';
 
 var
     g_host_log_path: string = '';
@@ -626,12 +629,14 @@ begin
     m_selected_index := 0;
     m_preedit_text := '';
     m_candidate_dirty := True;
+    m_candidate_generation := 0;
     m_pending_candidate_caret := Point(0, 0);
     m_pending_candidate_has_caret := False;
     m_pending_candidate_line_height := 0;
     m_pending_candidate_terminal_like_target := False;
     m_pending_candidate_source := casCursor;
     m_pending_candidate_score := Low(Integer);
+    m_pending_candidate_generation := 0;
     m_candidate_apply_queued := False;
     m_last_candidate_source := casCursor;
     m_last_candidate_score := Low(Integer);
@@ -742,6 +747,11 @@ begin
     Result := m_terminal_like_target <> terminal_like_target;
 end;
 
+function TncHostSession.candidate_generation: UInt64;
+begin
+    Result := m_candidate_generation;
+end;
+
 procedure TncHostSession.store_candidates(const candidates: TncCandidateList; const page_index: Integer;
     const page_count: Integer; const selected_index: Integer; const preedit_text: string);
 var
@@ -759,6 +769,7 @@ begin
     m_preedit_text := preedit_text;
     if changed then
     begin
+        Inc(m_candidate_generation);
         m_candidate_dirty := True;
     end;
 end;
@@ -770,6 +781,7 @@ begin
     m_page_count := 0;
     m_selected_index := 0;
     m_preedit_text := '';
+    Inc(m_candidate_generation);
     m_candidate_dirty := True;
 end;
 
@@ -783,12 +795,15 @@ begin
     Result := m_candidate_dirty;
 end;
 
-procedure TncHostSession.apply_candidate_content_only;
+procedure TncHostSession.apply_candidate_content_only(const candidate_generation: UInt64);
 begin
     if Length(m_candidates) = 0 then
     begin
         hide_candidate_window;
-        m_candidate_dirty := False;
+        if candidate_generation = m_candidate_generation then
+        begin
+            m_candidate_dirty := False;
+        end;
         Exit;
     end;
 
@@ -799,7 +814,10 @@ begin
             m_preedit_text, m_engine.config.debug_mode);
         m_last_candidate_debug_mode := m_engine.config.debug_mode;
     end;
-    m_candidate_dirty := False;
+    if candidate_generation = m_candidate_generation then
+    begin
+        m_candidate_dirty := False;
+    end;
 end;
 
 procedure TncHostSession.hide_candidate_window;
@@ -811,7 +829,8 @@ begin
 end;
 
 procedure TncHostSession.apply_candidate_state(const caret: TPoint; const has_caret: Boolean; const line_height: Integer;
-    const terminal_like_target: Boolean; const source: TncCaretAnchorSource; const anchor_score: Integer);
+    const terminal_like_target: Boolean; const source: TncCaretAnchorSource; const anchor_score: Integer;
+    const candidate_generation: UInt64);
 var
     y_offset: Integer;
     target_point: TPoint;
@@ -823,7 +842,10 @@ begin
     if Length(m_candidates) = 0 then
     begin
         hide_candidate_window;
-        m_candidate_dirty := False;
+        if candidate_generation = m_candidate_generation then
+        begin
+            m_candidate_dirty := False;
+        end;
         Exit;
     end;
 
@@ -909,7 +931,10 @@ begin
     m_last_candidate_source := source;
     m_last_candidate_score := anchor_score;
     m_last_candidate_apply_tick := GetTickCount;
-    m_candidate_dirty := False;
+    if candidate_generation = m_candidate_generation then
+    begin
+        m_candidate_dirty := False;
+    end;
 end;
 
 procedure TncHostSession.stage_candidate_apply(const caret: TPoint; const has_caret: Boolean;
@@ -924,6 +949,10 @@ begin
 
     if m_candidate_apply_queued then
     begin
+        if m_candidate_dirty then
+        begin
+            m_pending_candidate_generation := m_candidate_generation;
+        end;
         replace_pending := (anchor_score > m_pending_candidate_score) or
             ((anchor_score = m_pending_candidate_score) and
             (caret_source_priority(source) >= caret_source_priority(m_pending_candidate_source)));
@@ -935,6 +964,7 @@ begin
             m_pending_candidate_terminal_like_target := terminal_like_target;
             m_pending_candidate_source := source;
             m_pending_candidate_score := anchor_score;
+            m_pending_candidate_generation := m_candidate_generation;
         end;
         Exit;
     end;
@@ -947,6 +977,7 @@ begin
         m_pending_candidate_terminal_like_target := terminal_like_target;
         m_pending_candidate_source := source;
         m_pending_candidate_score := anchor_score;
+        m_pending_candidate_generation := m_candidate_generation;
         should_queue := True;
         if should_queue then
         begin
@@ -971,6 +1002,7 @@ begin
     m_pending_candidate_terminal_like_target := terminal_like_target;
     m_pending_candidate_source := source;
     m_pending_candidate_score := anchor_score;
+    m_pending_candidate_generation := m_candidate_generation;
     should_queue := True;
     if should_queue then
     begin
@@ -980,7 +1012,7 @@ end;
 
 function TncHostSession.consume_pending_candidate_apply(out caret: TPoint; out has_caret: Boolean;
     out line_height: Integer; out terminal_like_target: Boolean; out source: TncCaretAnchorSource;
-    out anchor_score: Integer): Boolean;
+    out anchor_score: Integer; out candidate_generation: UInt64): Boolean;
 begin
     if not m_candidate_apply_queued then
     begin
@@ -990,6 +1022,7 @@ begin
         terminal_like_target := False;
         source := casCursor;
         anchor_score := 0;
+        candidate_generation := m_candidate_generation;
         Result := False;
         Exit;
     end;
@@ -1000,6 +1033,7 @@ begin
     terminal_like_target := m_pending_candidate_terminal_like_target;
     source := m_pending_candidate_source;
     anchor_score := m_pending_candidate_score;
+    candidate_generation := m_pending_candidate_generation;
     m_candidate_apply_queued := False;
     Result := True;
 end;
@@ -1777,6 +1811,7 @@ var
     candidate_score: Integer;
     queue_candidate_apply: Boolean;
     queue_candidate_content_update: Boolean;
+    candidate_content_generation: UInt64;
     has_candidate_anchor: Boolean;
 begin
     handled := False;
@@ -1822,6 +1857,7 @@ begin
     caret_point := Point(0, 0);
     queue_candidate_apply := False;
     queue_candidate_content_update := False;
+    candidate_content_generation := 0;
     m_lock.Acquire;
     try
         touch_session_activity(session_id);
@@ -1908,6 +1944,7 @@ begin
                 if (not has_candidate_anchor) and session.has_dirty_candidates then
                 begin
                     queue_candidate_content_update := True;
+                    candidate_content_generation := session.candidate_generation;
                 end;
             end;
         end;
@@ -1974,6 +2011,7 @@ begin
                 if (not has_candidate_anchor) and session.has_dirty_candidates then
                 begin
                     queue_candidate_content_update := True;
+                    candidate_content_generation := session.candidate_generation;
                 end;
             end;
         end;
@@ -2001,6 +2039,7 @@ begin
                 queued_terminal_like_target: Boolean;
                 queued_source: TncCaretAnchorSource;
                 queued_score: Integer;
+                queued_generation: UInt64;
             begin
                 m_lock.Acquire;
                 try
@@ -2009,7 +2048,8 @@ begin
                         Exit;
                     end;
                     if not queued_session.consume_pending_candidate_apply(queued_point, queued_has_caret,
-                        queued_line_height, queued_terminal_like_target, queued_source, queued_score) then
+                        queued_line_height, queued_terminal_like_target, queued_source, queued_score,
+                        queued_generation) then
                     begin
                         Exit;
                     end;
@@ -2017,7 +2057,7 @@ begin
                     m_lock.Release;
                 end;
                 queued_session.apply_candidate_state(queued_point, queued_has_caret, queued_line_height,
-                    queued_terminal_like_target, queued_source, queued_score);
+                    queued_terminal_like_target, queued_source, queued_score, queued_generation);
             end);
     end;
     if queue_candidate_content_update and (not queue_candidate_apply) then
@@ -2036,7 +2076,7 @@ begin
                 finally
                     m_lock.Release;
                 end;
-                queued_session.apply_candidate_content_only;
+                queued_session.apply_candidate_content_only(candidate_content_generation);
             end);
     end;
 
@@ -2403,6 +2443,7 @@ begin
                 queued_terminal_like_target: Boolean;
                 queued_source: TncCaretAnchorSource;
                 queued_score: Integer;
+                queued_generation: UInt64;
             begin
                 m_lock.Acquire;
                 try
@@ -2411,7 +2452,8 @@ begin
                         Exit;
                     end;
                     if not queued_session.consume_pending_candidate_apply(queued_point, queued_has_caret,
-                        queued_line_height, queued_terminal_like_target, queued_source, queued_score) then
+                        queued_line_height, queued_terminal_like_target, queued_source, queued_score,
+                        queued_generation) then
                     begin
                         Exit;
                     end;
@@ -2419,7 +2461,7 @@ begin
                     m_lock.Release;
                 end;
                 queued_session.apply_candidate_state(queued_point, queued_has_caret, queued_line_height,
-                    queued_terminal_like_target, queued_source, queued_score);
+                    queued_terminal_like_target, queued_source, queued_score, queued_generation);
             end);
     end;
 end;
@@ -2455,6 +2497,7 @@ var
     should_hide: Boolean;
     caret_point: TPoint;
     has_caret: Boolean;
+    refresh_generation: UInt64;
 
     function candidate_has_pinyin_tail(const candidate: TncCandidate): Boolean;
     var
@@ -2507,6 +2550,7 @@ begin
     should_hide := False;
     caret_point := Point(0, 0);
     has_caret := False;
+    refresh_generation := 0;
     session := nil;
 
     m_lock.Acquire;
@@ -2561,6 +2605,7 @@ begin
         else
         begin
             session.store_candidates(candidates, page_index, page_count, selected_index, preedit_text);
+            refresh_generation := session.candidate_generation;
             should_refresh := True;
         end;
 
@@ -2585,7 +2630,8 @@ begin
             else
             begin
                 session.apply_candidate_state(caret_point, has_caret, session.caret_line_height,
-                    session.m_terminal_like_target, session.m_last_candidate_source, session.m_last_candidate_score);
+                    session.m_terminal_like_target, session.m_last_candidate_source, session.m_last_candidate_score,
+                    refresh_generation);
             end;
         end);
 end;
