@@ -280,11 +280,7 @@ resourcestring
     SLabelCandidateSize = '大小';
     SLabelCandidatePreview = '预览';
     SSizeMinimum = '最小';
-    SSizeExtraSmaller = '更小';
-    SSizeSmaller = '较小';
     SSizeDefault = '默认';
-    SSizeLarger = '较大';
-    SSizeExtraLarger = '更大';
     SSizeMaximum = '最大';
     SCheckEnableLogging = '启用日志';
     SLabelLogLevel = '日志级别';
@@ -1568,11 +1564,11 @@ var
     track_label_left: Integer;
 begin
     size_label_texts[0] := SSizeMinimum;
-    size_label_texts[1] := SSizeExtraSmaller;
-    size_label_texts[2] := SSizeSmaller;
+    size_label_texts[1] := '';
+    size_label_texts[2] := '';
     size_label_texts[3] := SSizeDefault;
-    size_label_texts[4] := SSizeLarger;
-    size_label_texts[5] := SSizeExtraLarger;
+    size_label_texts[4] := '';
+    size_label_texts[5] := '';
     size_label_texts[6] := SSizeMaximum;
 
     section_top := scale_ui(18);
