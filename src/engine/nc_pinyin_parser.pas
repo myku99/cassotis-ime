@@ -118,6 +118,20 @@ var
             end;
         end;
 
+        // j/q/x use u as the written form of ü only for u/ue/uan/un.
+        // Other u-medial finals are invalid and otherwise steal boundaries,
+        // e.g. "quangao" becomes invalid "quang"+"ao" instead of "quan"+"gao".
+        if (initial_value = 'j') or (initial_value = 'q') or
+            (initial_value = 'x') then
+        begin
+            if (final_value = 'ua') or (final_value = 'uai') or
+                (final_value = 'uang') or (final_value = 'ui') or
+                (final_value = 'uo') then
+            begin
+                Exit(False);
+            end;
+        end;
+
         // Restrict obviously invalid retroflex/alveolar combinations to avoid
         // greedy wrong splits like "zhineng" -> "zhin + eng" (expected "zhi + neng").
         if (initial_value = 'zh') or (initial_value = 'ch') or (initial_value = 'sh') or
